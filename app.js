@@ -1,7 +1,7 @@
 "use strict";
 
-// Google Apps Script web app URL. Keep this URL aligned with the deployed script.
-const REGISTRATION_ENDPOINT = "https://script.google.com/a/macros/iesmarquesdecomares.org/s/AKfycbxVBtUtfIN50qY2bCz9SPfh7QvFLlCI9I-vt_pMrjtOaBnMf5vmiGrwn9YwmGrSxdoBvA/exec";
+// Public Google Apps Script web app URL. The deployment must allow access to anyone.
+const REGISTRATION_ENDPOINT = "https://script.google.com/macros/s/AKfycbxVBtUtfIN50qY2bCz9SPfh7QvFLlCI9I-vt_pMrjtOaBnMf5vmiGrwn9YwmGrSxdoBvA/exec";
 
 // ==================== EDITABLE BANK ====================
 // Vocabulary creates more than 120 distinct challenge objects (translation and scramble forms).
@@ -119,7 +119,7 @@ function verifyStudentPin(pin) {
       if (error) reject(error); else resolve(data);
     }
     window[callbackName] = data => finish(null, data);
-    script.onerror = () => finish(new Error("Could not connect to the registration service."));
+    script.onerror = () => finish(new Error("The registration service is unavailable. Please ask your teacher to enable public access to it."));
     script.src = REGISTRATION_ENDPOINT + "?accion=verificar&pin=" + encodeURIComponent(pin) + "&callback=" + callbackName;
     document.head.appendChild(script);
   });
@@ -132,7 +132,7 @@ async function registerFinalResult(percentage) {
   const payload = {
     accion: "guardar",
     pin: state.studentPin,
-    notaNumerica: Number((state.correct / state.session.total * 10).toFixed(2)),
+    notaNumerica: Number((state.correct / state.session.total * 10).toFixed(1)),
     aciertos: state.correct,
     errores: state.incorrect,
     porcentaje: percentage,
