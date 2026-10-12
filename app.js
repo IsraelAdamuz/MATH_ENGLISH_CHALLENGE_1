@@ -1,5 +1,8 @@
 "use strict";
 
+// Google Apps Script web app URL. Keep this URL aligned with the deployed script.
+const REGISTRATION_ENDPOINT = "https://script.google.com/a/macros/iesmarquesdecomares.org/s/AKfycbxVBtUtfIN50qY2bCz9SPfh7QvFLlCI9I-vt_pMrjtOaBnMf5vmiGrwn9YwmGrSxdoBvA/exec";
+
 // ==================== EDITABLE BANK ====================
 // Vocabulary creates more than 120 distinct challenge objects (translation and scramble forms).
 const vocabulary = {
@@ -64,11 +67,93 @@ function generateGameSession() {
 }
 
 // ==================== GAME STATE ====================
-const state = { session:null, index:0, level:0, correct:0, incorrect:0, streak:0, bestStreak:0, lives:3, stats:{}, completed:[], startedAt:0, elapsedSeconds:0, timerId:null, locked:false, interaction:null, student:"", studentClass:"" };
-const elements = Object.fromEntries(["welcome-screen:welcome","level-screen:levelScreen","game-screen:game","result-screen:result","start-form:form","student-name:name","student-class:studentClass","name-error:nameError","begin-level-button:beginLevel","level-kicker:levelKicker","level-orb:levelOrb","level-title:levelTitle","level-description:levelDescription","level-map-list:levelMap","header-student:headerStudent","level-live-label:levelLive","question-number:questionNumber","challenge-total:challengeTotal","category-label:category","question-text:question","options:options","feedback:feedback","progress-bar:progress","live-correct:liveCorrect","live-incorrect:liveIncorrect","live-streak:liveStreak","lives:lives","result-student:resultStudent","result-class:resultClass","result-date:resultDate","final-correct:finalCorrect","final-total:finalTotal","final-percentage:finalPercentage","final-correct-summary:finalCorrectSummary","final-incorrect-summary:finalIncorrectSummary","final-best-streak:finalBestStreak","final-time:finalTime","category-breakdown:breakdown","completed-levels-list:completedLevels","badge-icon:badgeIcon","badge-title:badgeTitle","confetti:confetti","screenshot-button:screenshot","play-again-button:playAgain"].map(item => { const [id, key] = item.split(":"); return [key, document.getElementById(id)]; }));
+const state = { session:null, index:0, level:0, correct:0, incorrect:0, streak:0, bestStreak:0, lives:3, stats:{}, completed:[], startedAt:0, elapsedSeconds:0, timerId:null, locked:false, interaction:null, student:"", studentClass:"", studentPin:"", resultSent:false };
+const elements = Object.fromEntries(["welcome-screen:welcome","level-screen:levelScreen","game-screen:game","result-screen:result","start-form:form","student-name:name","student-class:studentClass","name-error:nameError","begin-level-button:beginLevel","level-kicker:levelKicker","level-orb:levelOrb","level-title:levelTitle","level-description:levelDescription","level-map-list:levelMap","header-student:headerStudent","level-live-label:levelLive","question-number:questionNumber","challenge-total:challengeTotal","category-label:category","question-text:question","options:options","feedback:feedback","progress-bar:progress","live-correct:liveCorrect","live-incorrect:liveIncorrect","live-streak:liveStreak","lives:lives","result-student:resultStudent","result-class:resultClass","result-date:resultDate","final-correct:finalCorrect","final-total:finalTotal","final-percentage:finalPercentage","final-correct-summary:finalCorrectSummary","final-incorrect-summary:finalIncorrectSummary","final-best-streak:finalBestStreak","final-time:finalTime","category-breakdown:breakdown","completed-levels-list:completedLevels","badge-icon:badgeIcon","badge-title:badgeTitle","confetti:confetti","screenshot-button:screenshot","play-again-button:playAgain","registration-status:registrationStatus"].map(item => { const [id, key] = item.split(":"); return [key, document.getElementById(id)]; }));
 
 function resetState() { clearInterval(state.timerId); state.session = generateGameSession(); Object.assign(state, { index:0, level:0, correct:0, incorrect:0, streak:0, bestStreak:0, lives:3, stats:{}, completed:[], elapsedSeconds:0, locked:false, interaction:null }); Object.keys(vocabulary).forEach(category => { state.stats[category] = { correct:0, total:0 }; }); state.session.challenges.forEach(challenge => { state.stats[challenge.category].total += 1; }); }
-function startChallenge(event) { event.preventDefault(); const name = elements.name.value.trim(); if (!name) { elements.nameError.hidden = false; elements.name.focus(); return; } state.student = name; state.studentClass = elements.studentClass.value.trim() || "Not specified"; elements.nameError.hidden = true; resetState(); state.startedAt = Date.now(); state.timerId = setInterval(() => { state.elapsedSeconds = Math.floor((Date.now() - state.startedAt) / 1000); }, 1000); elements.headerStudent.textContent = state.student; elements.challengeTotal.textContent = state.session.total; elements.welcome.hidden = true; showLevel(0); }
+async function startChallenge(event) {
+  event.preventDefault();
+  const pin = elements.name.value.trim();
+  if (!pin) {
+    elements.nameError.textContent = "Enter your personal PIN to start.";
+    elements.nameError.hidden = false;
+    elements.name.focus();
+    return;
+  }
+  const submitButton = elements.form.querySelector('button[type="submit"]');
+  submitButton.disabled = true;
+  submitButton.textContent = "CHECKING PIN…";
+  elements.nameError.hidden = true;
+  try {
+    const student = await verifyStudentPin(pin);
+    if (!student || !student.valido) throw new Error("PIN not found. Check it and try again.");
+    state.studentPin = pin;
+    state.student = student.nombre;
+    state.studentClass = student.clase;
+    resetState();
+    state.startedAt = Date.now();
+    state.timerId = setInterval(() => { state.elapsedSeconds = Math.floor((Date.now() - state.startedAt) / 1000); }, 1000);
+    elements.headerStudent.textContent = state.student;
+    elements.challengeTotal.textContent = state.session.total;
+    elements.welcome.hidden = true;
+    showLevel(0);
+  } catch (error) {
+    elements.nameError.textContent = error.message || "Could not verify the PIN. Please try again.";
+    elements.nameError.hidden = false;
+    elements.name.focus();
+  } finally {
+    submitButton.disabled = false;
+    submitButton.innerHTML = 'START CHALLENGE <span aria-hidden="true">🚀</span>';
+  }
+}
+
+function verifyStudentPin(pin) {
+  return new Promise((resolve, reject) => {
+    const callbackName = "__mathPinCallback_" + Math.random().toString(36).slice(2);
+    const script = document.createElement("script");
+    const timeout = setTimeout(() => finish(new Error("PIN check timed out. Please try again.")), 12000);
+    function finish(error, data) {
+      clearTimeout(timeout);
+      delete window[callbackName];
+      script.remove();
+      if (error) reject(error); else resolve(data);
+    }
+    window[callbackName] = data => finish(null, data);
+    script.onerror = () => finish(new Error("Could not connect to the registration service."));
+    script.src = REGISTRATION_ENDPOINT + "?accion=verificar&pin=" + encodeURIComponent(pin) + "&callback=" + callbackName;
+    document.head.appendChild(script);
+  });
+}
+
+async function registerFinalResult(percentage) {
+  if (state.resultSent) return;
+  state.resultSent = true;
+  elements.registrationStatus.textContent = "Sending your result to your teacher…";
+  const payload = {
+    accion: "guardar",
+    pin: state.studentPin,
+    notaNumerica: Number((state.correct / state.session.total * 10).toFixed(2)),
+    aciertos: state.correct,
+    errores: state.incorrect,
+    porcentaje: percentage,
+    duracionSegundos: state.elapsedSeconds,
+    totalPreguntas: state.session.total
+  };
+  try {
+    // no-cors allows a static GitHub Pages site to submit the form without a CORS preflight.
+    // The opaque response cannot confirm whether Apps Script accepted the write.
+    await fetch(REGISTRATION_ENDPOINT, {
+      method: "POST",
+      mode: "no-cors",
+      headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+      body: new URLSearchParams({ payload: JSON.stringify(payload) })
+    });
+    elements.registrationStatus.textContent = "Result sent. Your teacher can check the class register. If it does not appear, please show your result screenshot.";
+  } catch (error) {
+    state.resultSent = false;
+    elements.registrationStatus.textContent = "The result could not be sent automatically. Please take a screenshot and submit it on Google Classroom.";
+  }
+}
 function showLevel(index) { state.level = index; state.lives = 3; const [name, description, color] = levels[index]; elements.levelKicker.textContent = index === 4 ? "FINAL LEVEL" : `LEVEL ${index + 1} OF ${levels.length}`; elements.levelOrb.textContent = index + 1; elements.levelOrb.className = `level-orb ${color}`; elements.levelTitle.textContent = name; elements.levelDescription.textContent = description; elements.levelMap.replaceChildren(); levels.forEach(([levelName], levelIndex) => { const row = document.createElement("div"); row.className = `map-item ${levelIndex < index ? "complete" : levelIndex === index ? "current" : ""}`; row.textContent = `${levelIndex < index ? "✓" : levelIndex + 1} ${levelName}`; elements.levelMap.append(row); }); elements.game.hidden = true; elements.levelScreen.hidden = false; }
 function beginLevel() { elements.levelScreen.hidden = true; elements.game.hidden = false; renderChallenge(); }
 
@@ -89,10 +174,10 @@ function advance() { state.index += 1; const next = state.session.challenges[sta
 function updateLive() { const answered = state.correct + state.incorrect; elements.liveCorrect.textContent = state.correct; elements.liveIncorrect.textContent = state.incorrect; elements.liveStreak.textContent = state.streak; elements.lives.textContent = `${"❤️".repeat(state.lives)}${"🖤".repeat(3 - state.lives)}`; elements.progress.style.width = `${(answered / state.session.total) * 100}%`; }
 function formatTime(seconds) { return `${String(Math.floor(seconds / 60)).padStart(2,"0")}:${String(seconds % 60).padStart(2,"0")}`; }
 function badge(percent) { if (percent === 100) return ["🏆","MATH ENGLISH MASTER"]; if (percent >= 90) return ["🥇","MATH EXPERT"]; if (percent >= 80) return ["🥈","MATH CHALLENGER"]; if (percent >= 70) return ["🥉","MATH EXPLORER"]; return ["🚀","KEEP TRAINING!"]; }
-function finish() { clearInterval(state.timerId); state.elapsedSeconds = Math.floor((Date.now() - state.startedAt) / 1000); const percentage = Math.round((state.correct / state.session.total) * 100), [icon, title] = badge(percentage); elements.game.hidden = true; elements.result.hidden = false; elements.resultStudent.textContent = state.student; elements.resultClass.textContent = state.studentClass; elements.resultDate.textContent = new Intl.DateTimeFormat("en-GB", { day:"2-digit", month:"long", year:"numeric" }).format(new Date()); elements.finalCorrect.textContent = state.correct; elements.finalTotal.textContent = state.session.total; elements.finalPercentage.textContent = `${percentage}%`; elements.finalCorrectSummary.textContent = state.correct; elements.finalIncorrectSummary.textContent = state.incorrect; elements.finalBestStreak.textContent = state.bestStreak; elements.finalTime.textContent = formatTime(state.elapsedSeconds); elements.badgeIcon.textContent = icon; elements.badgeTitle.textContent = title; renderBreakdown(); renderLevels(); if (percentage === 100) confetti(); window.scrollTo({ top:0, behavior:"smooth" }); }
+function finish() { clearInterval(state.timerId); state.elapsedSeconds = Math.floor((Date.now() - state.startedAt) / 1000); const percentage = Math.round((state.correct / state.session.total) * 100), [icon, title] = badge(percentage); elements.game.hidden = true; elements.result.hidden = false; elements.resultStudent.textContent = state.student; elements.resultClass.textContent = state.studentClass; elements.resultDate.textContent = new Intl.DateTimeFormat("en-GB", { day:"2-digit", month:"long", year:"numeric" }).format(new Date()); elements.finalCorrect.textContent = state.correct; elements.finalTotal.textContent = state.session.total; elements.finalPercentage.textContent = `${percentage}%`; elements.finalCorrectSummary.textContent = state.correct; elements.finalIncorrectSummary.textContent = state.incorrect; elements.finalBestStreak.textContent = state.bestStreak; elements.finalTime.textContent = formatTime(state.elapsedSeconds); elements.badgeIcon.textContent = icon; elements.badgeTitle.textContent = title; renderBreakdown(); renderLevels(); elements.registrationStatus.textContent = "Sending your result to your teacher…"; registerFinalResult(percentage); if (percentage === 100) confetti(); window.scrollTo({ top:0, behavior:"smooth" }); }
 function renderBreakdown() { elements.breakdown.replaceChildren(); Object.keys(vocabulary).forEach(category => { const stat = state.stats[category], percent = Math.round((stat.correct / stat.total) * 100), row = document.createElement("div"), label = document.createElement("span"), track = document.createElement("div"), fill = document.createElement("div"), score = document.createElement("b"); row.className = "breakdown-row"; label.textContent = category[0].toUpperCase() + category.slice(1); track.className = "breakdown-track"; fill.className = "breakdown-fill"; fill.style.width = `${percent}%`; score.textContent = `${stat.correct} / ${stat.total} (${percent}%)`; track.append(fill); row.append(label, track, score); elements.breakdown.append(row); }); }
 function renderLevels() { elements.completedLevels.replaceChildren(); levels.forEach(([name]) => { const row = document.createElement("p"); row.textContent = `✓ ${name}`; elements.completedLevels.append(row); }); }
 function confetti() { elements.confetti.replaceChildren(); ["#1768ac","#0f887f","#f0b63d","#be4651"].forEach((color, index) => { for (let count = 0; count < 15; count += 1) { const piece = document.createElement("i"); piece.className = "confetti"; piece.style.left = `${(index * 23 + count * 7) % 100}%`; piece.style.background = color; piece.style.animationDelay = `${count / 14}s`; elements.confetti.append(piece); } }); }
 function prepareScreenshot() { document.body.classList.add("screenshot-mode"); window.scrollTo({ top:0, behavior:"smooth" }); }
-function playAgain() { document.body.classList.remove("screenshot-mode"); clearInterval(state.timerId); elements.result.hidden = true; elements.welcome.hidden = false; elements.name.focus(); }
+function playAgain() { document.body.classList.remove("screenshot-mode"); clearInterval(state.timerId); elements.result.hidden = true; elements.welcome.hidden = false; elements.name.value = state.studentPin; elements.name.focus(); }
 elements.form.addEventListener("submit", startChallenge); elements.name.addEventListener("input", () => { elements.nameError.hidden = true; }); elements.beginLevel.addEventListener("click", beginLevel); elements.screenshot.addEventListener("click", prepareScreenshot); elements.playAgain.addEventListener("click", playAgain); document.addEventListener("keydown", event => { if (event.key === "Escape") document.body.classList.remove("screenshot-mode"); });
